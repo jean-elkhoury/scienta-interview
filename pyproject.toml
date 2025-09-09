@@ -1,0 +1,24 @@
+[project]
+name = "scienta"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "jelkhouryy", email = "jean.el-khoury@owkin.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "jupyter>=1.1.1",
+    "mlflow>=3.3.2",
+    "scanpy>=1.11.4",
+    "seaborn>=0.13.2",
+    "torch>=2.8.0",
+    "zarr>=2.18.3",
+]
+
+[project.scripts]
+scienta = "scienta:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
