@@ -1,13 +1,14 @@
 import torch
 from sklearn.preprocessing import OneHotEncoder
+import anndata as ad
 
 
 class AnnDataset(torch.utils.data.Dataset):
     def __init__(
         self,
-        adata,
-        tech_vars,
-        bio_vars,
+        adata: ad.AnnData,
+        tech_vars: list[str],
+        bio_vars: list[str],
     ):
         self.adata = adata
         self.count = torch.from_numpy(adata.X)
@@ -18,7 +19,7 @@ class AnnDataset(torch.utils.data.Dataset):
         self.tech_encoder = OneHotEncoder(sparse_output=False)
         self.tech_encoder.fit(adata.obs[self.tech_vars])
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         tech_encoded = self.tech_encoder.transform(
             self.adata.obs.iloc[[idx]][self.tech_vars]
         ).reshape(-1)

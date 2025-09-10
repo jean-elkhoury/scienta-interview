@@ -10,7 +10,11 @@ requires-python = ">=3.10"
 dependencies = [
     "jupyter>=1.1.1",
     "mlflow>=3.3.2",
+    "mypy>=1.17.1",
+    "pydoclint>=0.7.3",
+    "ruff>=0.12.12",
     "scanpy>=1.11.4",
+    "scikit-network>=0.33.3",
     "seaborn>=0.13.2",
     "torch>=2.8.0",
     "zarr>=2.18.3",
@@ -22,3 +26,6 @@ scienta = "scienta:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.mypy]
+ignore_missing_imports = true

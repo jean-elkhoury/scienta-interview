@@ -1,1 +1,1 @@
-from .invae import inVAE
+from .invae import inVAE as inVAE

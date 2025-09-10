@@ -1,15 +1,22 @@
 import torch
 import torch.nn as nn
 from torch.distributions import Normal
-import torch.nn.functional as F
+from scienta.utils import kl_divergence_gaussian
 
 
 class MLP(nn.Module):
     """Basic MLP block."""
 
-    def __init__(self, n_in, n_out, n_hidden=128, n_layers=2, dropout_rate=0.1):
+    def __init__(
+        self,
+        n_in: int,
+        n_out: int,
+        n_hidden: int = 128,
+        n_layers: int = 2,
+        dropout_rate: float = 0.1,
+    ):
         super().__init__()
-        layers = []
+        layers: list[nn.Module] = []
         in_dim = n_in
         for _ in range(n_layers):
             layers.append(nn.Linear(in_dim, n_hidden))
@@ -27,61 +34,55 @@ class MLP(nn.Module):
 class inVAE(nn.Module):
     def __init__(
         self,
-        n_input,
-        n_bio_covariates,
-        n_tech_covariates,
-        n_latent_inv=30,
-        n_latent_spur=5,
-        n_hidden=128,
-        n_layers=2,
-        dropout_rate=0.1,
+        n_input: int,
+        n_bio_covariates: int,
+        n_tech_covariates: int,
+        n_latent_inv: int = 30,
+        n_latent_spur: int = 5,
+        n_hidden: int = 128,
+        n_layers: int = 2,
+        dropout_rate: float = 0.1,
+        beta: float = 1.0,
     ):
         super().__init__()
+        self.beta = beta
 
-        # --- ENCODER ---
-        # Takes concatenated input (X), biological covariates (B), and technical covariates (T)
+        # Shared encoder
         encoder_input_dim = n_input + n_bio_covariates + n_tech_covariates
         self.shared_encoder_mlp = MLP(
             encoder_input_dim, n_hidden, n_hidden, n_layers, dropout_rate
         )
 
-        # Output layers for the posterior distribution q(Z|X, B, T)
+        # Latent mean and logvar
         self.mean_inv_encoder = nn.Linear(n_hidden, n_latent_inv)
         self.log_var_inv_encoder = nn.Linear(n_hidden, n_latent_inv)
         self.mean_spur_encoder = nn.Linear(n_hidden, n_latent_spur)
         self.log_var_spur_encoder = nn.Linear(n_hidden, n_latent_spur)
 
-        # --- DECODER ---
-        # Takes concatenated latent variables (Z_invariant, Z_spurious)
+        # Decoder
         decoder_input_dim = n_latent_inv + n_latent_spur
         self.shared_decoder_mlp = MLP(
             decoder_input_dim, n_hidden, n_hidden, n_layers, dropout_rate
         )
 
-        # Output layers for the Negative Binomial distribution parameters
-        # We model log(mean) and log(dispersion) to ensure they are positive
         self.px_log_mean_decoder = nn.Linear(n_hidden, n_input)
         self.px_log_disp_decoder = nn.Linear(n_hidden, n_input)
 
-        # --- PRIOR NETWORKS ---
-        # These networks learn the parameters of the prior distributions
-        # p(Z_invariant | B) and p(Z_spurious | T)
-
-        # Invariant prior network
+        # Invariant prior
         self.prior_inv_mlp = MLP(
             n_bio_covariates, n_hidden, n_hidden, n_layers, dropout_rate
         )
         self.prior_inv_mean = nn.Linear(n_hidden, n_latent_inv)
         self.prior_inv_log_var = nn.Linear(n_hidden, n_latent_inv)
 
-        # Spurious prior network
+        # Spurious prior
         self.prior_spur_mlp = MLP(
             n_tech_covariates, n_hidden, n_hidden, n_layers, dropout_rate
         )
         self.prior_spur_mean = nn.Linear(n_hidden, n_latent_spur)
         self.prior_spur_log_var = nn.Linear(n_hidden, n_latent_spur)
 
-    def sample_latent(self, mean, log_var):
+    def sample_latent(self, mean: torch.Tensor, log_var: torch.Tensor):
         """Standard VAE reparameterization trick."""
         std = (
             torch.exp(0.5 * log_var) + 1e-4
@@ -89,20 +90,13 @@ class inVAE(nn.Module):
         eps = torch.randn_like(std)
         return mean + eps * std
 
-    def forward(self, x, b_cov, t_cov):
-        """
-        Forward pass of the inVAE model.
-
-        Args:
-            x (torch.Tensor): Input data (e.g., gene counts).
-            b_cov (torch.Tensor): One-hot encoded biological covariates.
-            t_cov (torch.Tensor): One-hot encoded technical covariates.
-
-        Returns:
-            dict: A dictionary containing all necessary tensors for loss calculation.
-        """
-        # Encoding
-        # Get parameters for the posterior distribution q(Z|X,B,T)
+    def encode(
+        self,
+        x: torch.Tensor,
+        b_cov: torch.Tensor,
+        t_cov: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Get latent distribution parameters."""
         encoder_input = torch.cat((x, b_cov, t_cov), dim=1)
         q = self.shared_encoder_mlp(encoder_input)
         q_mean_inv = self.mean_inv_encoder(q)
@@ -110,73 +104,88 @@ class inVAE(nn.Module):
         q_mean_spur = self.mean_spur_encoder(q)
         q_log_var_spur = self.log_var_spur_encoder(q)
 
-        # Sample in latent space
-        # Sample latent variables using the reparameterization trick
-        z_inv = self.sample_latent(q_mean_inv, q_log_var_inv)
-        z_spur = self.sample_latent(q_mean_spur, q_log_var_spur)
-
-        # Decoding
-        # Reconstruct the input data from the latent samples
-        z_concat = torch.cat((z_inv, z_spur), dim=1)
-        px = self.shared_decoder_mlp(z_concat)
-        px_log_mean = self.px_log_mean_decoder(px)
-        px_log_disp = self.px_log_disp_decoder(px)
-
-        # Prior parameters
-        # Get parameters for the prior distributions p(Z_inv|B) and p(Z_spur|T)
-        p_inv = self.prior_inv_mlp(b_cov)
-        p_mean_inv = self.prior_inv_mean(p_inv)
-        p_log_var_inv = self.prior_inv_log_var(p_inv)
-
-        p_spur = self.prior_spur_mlp(t_cov)
-        p_mean_spur = self.prior_spur_mean(p_spur)
-        p_log_var_spur = self.prior_spur_log_var(p_spur)
-
         return {
-            "px_log_mean": px_log_mean,
-            "px_log_disp": px_log_disp,
             "q_mean_inv": q_mean_inv,
             "q_log_var_inv": q_log_var_inv,
             "q_mean_spur": q_mean_spur,
             "q_log_var_spur": q_log_var_spur,
-            "p_mean_inv": p_mean_inv,
-            "p_log_var_inv": p_log_var_inv,
+        }
+
+    def prior_spur(
+        self,
+        t_cov: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        p_spur = self.prior_spur_mlp(t_cov)
+        p_mean_spur = self.prior_spur_mean(p_spur)
+        p_log_var_spur = self.prior_spur_log_var(p_spur)
+        return {
             "p_mean_spur": p_mean_spur,
             "p_log_var_spur": p_log_var_spur,
         }
 
-    def loss(self, x, outputs, beta=1.0):
-        """
-        Calculates the Evidence Lower Bound (ELBO) loss for the inVAE model.
+    def prior_inv(
+        self,
+        b_cov: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        p_inv = self.prior_inv_mlp(b_cov)
+        p_mean_inv = self.prior_inv_mean(p_inv)
+        p_log_var_inv = self.prior_inv_log_var(p_inv)
+        return {
+            "p_mean_inv": p_mean_inv,
+            "p_log_var_inv": p_log_var_inv,
+        }
 
-        Args:
-            x (torch.Tensor): The original input data.
-            outputs (dict): The dictionary returned by the forward pass.
-            beta (float): The weight for the KL divergence term.
+    def decode(
+        self,
+        z_concat: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        px = self.shared_decoder_mlp(z_concat)
+        px_log_mean = self.px_log_mean_decoder(px)
+        px_log_disp = self.px_log_disp_decoder(px)
+        return {
+            "px_log_mean": px_log_mean,
+            "px_log_disp": px_log_disp,
+        }
 
-        Returns:
-            dict: A dictionary containing the total loss, reconstruction loss, and KL divergence.
-        """
-        # --- 1. Reconstruction Loss (Negative Log-Likelihood) ---
-        # We use a Negative Binomial distribution for the reconstruction
+    def forward(
+        self,
+        x: torch.Tensor,
+        b_cov: torch.Tensor,
+        t_cov: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        latent_params = self.encode(x, b_cov, t_cov)
+        z_inv = self.sample_latent(
+            latent_params["q_mean_inv"], latent_params["q_log_var_inv"]
+        )
+        z_spur = self.sample_latent(
+            latent_params["q_mean_spur"], latent_params["q_log_var_spur"]
+        )
+        z_concat = torch.cat((z_inv, z_spur), dim=1)
+        reconstructed_params = self.decode(z_concat)
+        spur_prior_params = self.prior_spur(t_cov)
+        inv_prior_params = self.prior_inv(b_cov)
+        return (
+            latent_params | reconstructed_params | spur_prior_params | inv_prior_params
+        )
+
+    def loss(
+        self,
+        x: torch.Tensor,
+        outputs: dict[str, torch.Tensor],
+        beta: float | None = None,
+    ):
+        """Loss function."""
+        if beta is None:
+            beta = self.beta
         disp = torch.exp(outputs["px_log_disp"])
         mean = torch.exp(outputs["px_log_mean"])
 
-        # More stable parameterization for NB with mean and dispersion
-        # probs = mu / (mu + theta)
-        # We use logits = log(probs / (1 - probs)) = log(mu / theta) = log_mu - log_theta
         # recons_dist = NegativeBinomial(total_count=disp, logits=mean.log() - disp.log())
-        recons_dist = Normal(loc=mean, scale=disp)
+        recons_dist = Normal(
+            loc=mean, scale=disp
+        )  # given data is not raw, use gaussian prior instead of NB
         log_likelihood = recons_dist.log_prob(x).sum(dim=-1)
         reconstruction_loss = -torch.mean(log_likelihood)
-
-        def kl_divergence_gaussian(q_mean, q_log_var, p_mean, p_log_var):
-            term1 = p_log_var - q_log_var
-            term2 = (torch.exp(q_log_var) + (q_mean - p_mean).pow(2)) / torch.exp(
-                p_log_var
-            )
-            kl = 0.5 * torch.sum(term1 + term2 - 1, dim=1)
-            return kl
 
         # KL for invariant
         kl_inv = kl_divergence_gaussian(
@@ -194,77 +203,15 @@ class inVAE(nn.Module):
             outputs["p_log_var_spur"],
         )
 
-        kl_local = torch.mean(kl_inv + kl_spur)
+        kl_local = beta * torch.mean(
+            kl_inv + kl_spur
+        )  # multiply here so it shows on the right scale in mlflow
+
         # Total loss
-        total_loss = reconstruction_loss + beta * kl_local
+        total_loss = reconstruction_loss + kl_local
 
         return {
             "loss": total_loss,
             "reconstruction_loss": reconstruction_loss,
             "kl_divergence": kl_local,
         }
-
-
-if __name__ == "__main__":
-    # --- DEMONSTRATION OF MODEL INSTANTIATION, FORWARD, AND BACKWARD PASS ---
-
-    # 1. Define model parameters
-    N_INPUT_GENES = 50
-    N_CELLS = 256  # Batch size
-    N_BIO_COVARIATES = 1  # e.g., 5 different disease variants
-    N_TECH_COVARIATES = 1  # e.g., 3 different sequencing batches
-
-    # 2. Create dummy data
-    # Gene expression data (raw counts)
-    x_data = torch.randint(0, 1000, (N_CELLS, N_INPUT_GENES)).float()
-
-    # Biological covariates (one-hot encoded)
-    b_cov_indices = torch.randint(0, N_BIO_COVARIATES, (N_CELLS,))
-    b_cov_data = F.one_hot(b_cov_indices, num_classes=N_BIO_COVARIATES).float()
-
-    # Technical covariates (one-hot encoded)
-    t_cov_indices = torch.randint(0, N_TECH_COVARIATES, (N_CELLS,))
-    t_cov_data = F.one_hot(t_cov_indices, num_classes=N_TECH_COVARIATES).float()
-
-    # 3. Instantiate the model
-    model = inVAE(
-        n_input=N_INPUT_GENES,
-        n_bio_covariates=N_BIO_COVARIATES,
-        n_tech_covariates=N_TECH_COVARIATES,
-        n_latent_inv=10,  # Smaller latent space for demo
-        n_latent_spur=3,
-    )
-
-    print("--- Model Instantiated ---")
-    print(model)
-
-    # 4. Perform a forward pass
-    print("\n--- Testing Forward Pass ---")
-    print(f"Input shape (genes): {x_data.shape}")
-    print(f"Input shape (bio covariates): {b_cov_data.shape}")
-    print(f"Input shape (tech covariates): {t_cov_data.shape}")
-
-    outputs = model(x_data, b_cov_data, t_cov_data)
-
-    print("\nForward pass successful. Output keys:")
-    print(list(outputs.keys()))
-    print(f"Shape of reconstructed mean: {outputs['px_log_mean'].shape}")
-
-    # 5. Calculate loss
-    loss_dict = model.loss(x_data, outputs)
-    total_loss = loss_dict["loss"]
-
-    print(f"\nCalculated loss: {total_loss.item():.4f}")
-
-    # 6. Perform a backward pass
-    print("\n--- Testing Backward Pass ---")
-    # In a real training loop, you would zero the gradients first: optimizer.zero_grad()
-    total_loss.backward()
-    print("Backward pass executed successfully.")
-
-    # Check if gradients are computed for a sample parameter
-    sample_param = next(model.parameters())
-    if sample_param.grad is not None:
-        print("Gradients have been computed and stored in .grad attributes.")
-    else:
-        print("Gradients were not computed.")

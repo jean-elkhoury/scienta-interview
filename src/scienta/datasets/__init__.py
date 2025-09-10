@@ -1,1 +1,1 @@
-from .anndataset import AnnDataset
+from .anndataset import AnnDataset as AnnDataset
