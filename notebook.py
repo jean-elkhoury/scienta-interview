@@ -50,13 +50,19 @@ def run_experiment(beta: float, lr: float) -> float:
     )
 
     trainer = Trainer(model=model, lr=lr, beta=beta)
-    trainer.fit(
+    # trainer.fit(
+    #     train_loader=train_loader,
+    #     val_loader=val_loader,
+    #     num_epochs=20,
+    #     num_epochs_warmup=10,
+    # )
+    trainer.train_with_tune(
         train_loader=train_loader,
         val_loader=val_loader,
         num_epochs=20,
-        # num_epochs_warmup=5,
+        num_epochs_warmup=10,
+        # config=search_space,
     )
-    trainer.evaluate(val_loader=test_loader)
 
 run_experiment(beta=beta, lr=lr)
 

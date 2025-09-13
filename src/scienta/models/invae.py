@@ -44,6 +44,11 @@ class inVAE(nn.Module):
         dropout_rate: float = 0.1,
     ):
         super().__init__()
+        self.n_latent_inv = n_latent_inv
+        self.n_latent_spur = n_latent_spur
+        self.n_hidden = n_hidden
+        self.n_layers = n_layers
+        self.dropout_rate = dropout_rate
 
         # Shared encoder
         encoder_input_dim = n_genes + n_bio_covariates + n_tech_covariates
