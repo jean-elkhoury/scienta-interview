@@ -68,7 +68,7 @@ class Trainer:
         for batch in tqdm(data_loader, desc=f"Looping on {prefix} loader"):
             if is_training:
                 # Training: use step method which handles optimization
-                outputs, batch_loss, batch_metrics = self.training_step(
+                outputs, batch_loss_tensor, batch_metrics = self.training_step(
                     batch=batch, is_warmup=is_warmup
                 )
             else:
@@ -78,12 +78,15 @@ class Trainer:
                     x=counts, b_cov=b_cov_data, t_cov=t_cov_data
                 )
                 beta = self.beta if not is_warmup else 0.0
-                batch_loss = self.model.loss(x=counts, outputs=outputs, beta=beta)
+                batch_loss_tensor = self.model.loss(
+                    x=counts, outputs=outputs, beta=beta
+                )
                 batch_metrics = self.compute_metrics(
                     outputs=outputs,
                     b_cov_data=b_cov_data,
                     t_cov_data=t_cov_data,
                 )
+            batch_loss = self._convert_tensors_to_scalars(batch_loss_tensor)
 
             # Accumulate losses and metricsx
             for loss_name, loss_value in batch_loss.items():
@@ -110,6 +113,7 @@ class Trainer:
                 loss_name: loss_sum / num_batches
                 for loss_name, loss_sum in epoch_loss.items()
             }
+
             mlflow.log_metrics(metrics=avg_epoch_metrics, step=epoch)
             mlflow.log_metrics(metrics=avg_epoch_loss, step=epoch)
 
@@ -148,6 +152,16 @@ class Trainer:
             "n_layers": self.model.n_layers,
             "dropout_rate": self.model.dropout_rate,
         }
+
+    def _convert_tensors_to_scalars(self, metrics_dict: dict) -> dict[str, float]:
+        """Convert PyTorch tensors to Python scalars."""
+        converted = {}
+        for key, value in metrics_dict.items():
+            if hasattr(value, "item"):  # PyTorch tensor
+                converted[key] = value.item()
+            else:
+                converted[key] = float(value)
+        return converted
 
     def louvain_clusters(self, features: np.ndarray):
         knn = NearestNeighbors(n_neighbors=10)

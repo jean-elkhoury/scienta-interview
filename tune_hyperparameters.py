@@ -17,7 +17,7 @@ from ray.tune import CLIReporter
 from scienta.models import inVAE
 from scienta.datasets import AnnDataset
 from scienta.trainer import Trainer
-from scienta.tune_config import (
+from scienta.config.tune_config import (
     get_search_space,
     get_tune_config,
 )
@@ -27,8 +27,7 @@ def load_data():
     """Load and prepare the dataset."""
     # Load data
     adata = sc.read(
-        "data/pancreas.h5ad",
-        backup_url="https://www.dropbox.com/s/qj1jlm9w10wmt0u/pancreas.h5ad?dl=1",
+        "/Users/jelkhoury/Desktop/perso/scienta/data/pancreas.h5ad",
     )
     del adata.raw
 
@@ -87,7 +86,7 @@ def train_invae_tune(config):
         train_loader=train_loader,
         val_loader=val_loader,
         num_epochs=int(config["num_epochs"]),
-        config=config,
+        num_epochs_warmup=int(config["num_epochs_warmup"]),
     )
 
 

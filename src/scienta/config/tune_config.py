@@ -16,10 +16,11 @@ def get_search_space() -> Dict[str, Any]:
         # "n_layers": tune.choice([2, 3]),
         "n_layers": tune.choice([2]),
         "dropout_rate": tune.uniform(0.0, 0.2),
-        "beta": tune.uniform(5.0, 15.0),
-        "lr": tune.loguniform(1e-5, 1e-3),
+        "beta": tune.uniform(1e0, 1e2),
+        "lr": tune.loguniform(1e-6, 1e-4),
         "batch_size": tune.choice([128, 256]),
         "num_epochs": tune.choice([20, 30]),
+        "num_epochs_warmup": tune.choice([10, 20]),
     }
 
 
@@ -27,7 +28,7 @@ def get_tune_config() -> Dict[str, Any]:
     """Get a quick configuration for testing."""
     return {
         "search_space": get_search_space(),
-        "num_samples": 10,
+        "num_samples": 2,
         "max_concurrent_trials": 2,
         "time_budget_s": 600,  # 10 minutes
         "grace_period": 3,

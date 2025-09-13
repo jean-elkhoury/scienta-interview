@@ -2,3 +2,6 @@
 .history/
 __pycache__/
 mlruns/
+ray_results/
+paper.pdf
+.DS_Store

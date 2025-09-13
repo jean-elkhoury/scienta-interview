@@ -18,7 +18,6 @@ dependencies = [
     "scanpy>=1.11.4",
     "scikit-network>=0.33.3",
     "seaborn>=0.13.2",
-    "tensorboard>=2.20.0",
     "torch>=2.8.0",
     "zarr>=2.18.3",
 ]
