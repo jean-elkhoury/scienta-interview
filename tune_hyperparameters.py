@@ -6,27 +6,29 @@ This script performs hyperparameter search using Ray Tune to find the best
 configuration for the inVAE model on the pancreas dataset.
 """
 
-import os
-import torch
+# %%
+from datetime import datetime
+
+import mlflow
 import scanpy as sc
+import torch
 from ray import tune
+from ray.tune import CLIReporter
 from ray.tune.schedulers import ASHAScheduler
 from ray.tune.search.optuna import OptunaSearch
-from ray.tune import CLIReporter
+from ray.air.integrations.mlflow import MLflowLoggerCallback
 
-from scienta.models import inVAE
-from scienta.datasets import AnnDataset
-from scienta.trainer import Trainer
 from scienta.config.tune_config import (
     get_search_space,
     get_tune_config,
 )
+from scienta.datasets import AnnDataset
+from scienta.models import inVAE
+from scienta.trainer import Trainer
 
 
 def load_data():
     """Load and prepare the dataset."""
-    # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load data
     adata = sc.read(
@@ -88,105 +90,79 @@ def train_invae_tune(config):
     trainer = Trainer(model=model, beta=config["beta"], lr=config["lr"])
 
     # Train with Ray Tune integration
-    trainer.train_with_tune(
+    trainer.fit(
         train_loader=train_loader,
         val_loader=val_loader,
         num_epochs=int(config["num_epochs"]),
         num_epochs_warmup=int(config["num_epochs_warmup"]),
+        early_stopping_patience=10,
+        is_tuning=True,
     )
 
 
-def main():
-    """Main function to run hyperparameter optimization."""
-    import mlflow
+# %%
+"""Main function to run hyperparameter optimization."""
 
-    # Initialize Ray
-    if not torch.cuda.is_available():
-        print("CUDA not available, using CPU")
+# Initialize Ray
+if not torch.cuda.is_available():
+    print("CUDA not available, using CPU")
 
-    # Get configuration
-    tune_config = get_tune_config()
-    search_space = get_search_space()
+# Set up MLflow tracking
+mlflow.set_tracking_uri("file:///Users/jelkhoury/Desktop/perso/scienta/mlruns")
 
-    # Start MLflow parent run for the entire hyperparameter search
-    with mlflow.start_run(run_name="invae_hyperparameter_search"):
-        mlflow.log_params(
-            {
-                "num_samples": tune_config["num_samples"],
-                "max_concurrent_trials": tune_config["max_concurrent_trials"],
-                "time_budget_s": tune_config["time_budget_s"],
-                "grace_period": tune_config["grace_period"],
-                "reduction_factor": tune_config["reduction_factor"],
-            }
-        )
+# Get configuration
+tune_config = get_tune_config()
+search_space = get_search_space()
+sweep_name = f"invae_hyperparameter_search_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-        # Create scheduler
-        scheduler = ASHAScheduler(
-            metric="val_loss",
-            mode="min",
-            max_t=tune_config["time_budget_s"],
-            grace_period=tune_config["grace_period"],
-            reduction_factor=tune_config["reduction_factor"],
-        )
-        # Create searcher
-        searcher = OptunaSearch(metric="val_loss", mode="min")
+# Create MLflow logger callback for Ray Tune
+mlflow_logger = MLflowLoggerCallback(
+    tracking_uri="file:///Users/jelkhoury/Desktop/perso/scienta/mlruns",
+    experiment_name=sweep_name,
+    tags={"project": "invae", "optimization": "ray_tune"},
+)
 
-        # Create reporter
-        reporter = CLIReporter(
-            metric_columns=[
-                "train_loss",
-                "val_loss",
-                "val_ari_inv_bio",
-                "val_ari_inv_batch",
-            ]
-        )
+# Create scheduler
+scheduler = ASHAScheduler(
+    metric="val_loss",
+    mode="min",
+    max_t=tune_config["time_budget_s"],
+    grace_period=tune_config["grace_period"],
+    reduction_factor=tune_config["reduction_factor"],
+)
 
-        # Run hyperparameter optimization
-        analysis = tune.run(
-            train_invae_tune,
-            config=search_space,
-            num_samples=tune_config["num_samples"],
-            max_concurrent_trials=tune_config["max_concurrent_trials"],
-            time_budget_s=tune_config["time_budget_s"],
-            scheduler=scheduler,
-            search_alg=searcher,
-            progress_reporter=reporter,
-            storage_path="/Users/jelkhoury/Desktop/perso/scienta/ray_results",
-            name="invae_hyperparameter_search",
-            resume="AUTO",  # Resume from previous runs if available
-        )
+# Create searcher
+searcher = OptunaSearch(metric="val_loss", mode="min")
 
-    # Print best results
-    print("\n" + "=" * 50)
-    print("HYPERPARAMETER OPTIMIZATION RESULTS")
-    print("=" * 50)
+# Create reporter
+reporter = CLIReporter(
+    metric_columns=[
+        "train_loss",
+        "val_loss",
+        "val_ari_inv_bio",
+        "val_ari_inv_batch",
+    ]
+)
 
-    best_trial = analysis.get_best_trial("val_loss", "min", "last")
-    print(f"Best trial config: {best_trial.config}")
-    print(f"Best trial final validation loss: {best_trial.last_result['val_loss']}")
-    print(
-        f"Best trial final validation ARI (inv-bio): {best_trial.last_result['val_ari_inv_bio']}"
-    )
-    print(
-        f"Best trial final validation ARI (inv-batch): {best_trial.last_result['val_ari_inv_batch']}"
-    )
+# Run hyperparameter optimization
+analysis = tune.run(
+    train_invae_tune,
+    config=search_space,
+    num_samples=tune_config["num_samples"],
+    max_concurrent_trials=tune_config["max_concurrent_trials"],
+    time_budget_s=tune_config["time_budget_s"],
+    scheduler=scheduler,
+    search_alg=searcher,
+    progress_reporter=reporter,
+    callbacks=[mlflow_logger],  # Add MLflow logger callback
+    storage_path="/Users/jelkhoury/Desktop/perso/scienta/ray_results",
+    name=sweep_name,
+    resume="AUTO",  # Resume from previous runs if available
+)
 
-    # Save best configuration
-    best_config = best_trial.config
-    print(f"\nBest configuration: {best_config}")
-    print("Best configuration saved to: ./ray_results/best_config.json")
+print(f"Best trial config: {analysis.get_best_config(metric='val_loss', mode='min')}")
+print(
+    f"Best trial final validation loss: {analysis.get_best_trial().last_result['val_loss']}"
+)
 
-    # Create a summary of all trials
-    results_df = analysis.results_df
-    results_df.to_csv("./ray_results/trial_results.csv", index=False)
-    print("All trial results saved to: ./ray_results/trial_results.csv")
-
-    return analysis
-
-
-if __name__ == "__main__":
-    # Create results directory
-    os.makedirs("./ray_results", exist_ok=True)
-
-    # Run hyperparameter optimization
-    analysis = main()
+# %%

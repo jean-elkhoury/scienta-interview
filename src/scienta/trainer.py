@@ -1,5 +1,3 @@
-import mlflow
-
 # import anndata as ad
 import numpy as np
 import torch
@@ -12,6 +10,7 @@ from sklearn.metrics import (
 )
 from scienta.models import inVAE
 from ray import tune
+import mlflow
 
 
 class Trainer:
@@ -114,9 +113,6 @@ class Trainer:
                 for loss_name, loss_sum in epoch_loss.items()
             }
 
-            mlflow.log_metrics(metrics=avg_epoch_metrics, step=epoch)
-            mlflow.log_metrics(metrics=avg_epoch_loss, step=epoch)
-
             return avg_epoch_loss, avg_epoch_metrics
         else:
             return {}, {}
@@ -127,20 +123,88 @@ class Trainer:
         val_loader: torch.utils.data.DataLoader,
         num_epochs: int,
         num_epochs_warmup: int,
+        early_stopping_patience: int | None = None,
+        is_tuning: bool = False,
     ):
-        with mlflow.start_run():
-            mlflow.log_params(self.get_params())
-            mlflow.log_params(
-                {"num_epochs": num_epochs, "num_epochs_warmup": num_epochs_warmup}
-            )
+        if is_tuning:
+            # Ray Tune mode: no MLflow logging, just report to Ray Tune
+            if early_stopping_patience is not None:
+                best_val_loss = float("inf")
+                patience_counter = 0
+
             for epoch in range(num_epochs):
-                warmup = epoch < num_epochs_warmup
-                self.run_epoch(
-                    train_loader, epoch=epoch, is_training=True, is_warmup=warmup
+                # Training epoch
+                train_loss, train_metrics = self.run_epoch(
+                    train_loader, epoch=epoch, is_training=True
                 )
-                self.run_epoch(
-                    val_loader, epoch=epoch, is_training=False, is_warmup=warmup
+
+                # Validation epoch
+                val_loss, val_metrics = self.run_epoch(
+                    val_loader, epoch=epoch, is_training=False
                 )
+
+                # Report metrics to Ray Tune
+                tune.report(
+                    {"epoch": epoch}
+                    | val_loss
+                    | val_metrics
+                    | train_loss
+                    | train_metrics
+                )
+
+                if early_stopping_patience is not None:
+                    current_val_loss = val_loss.get("val_loss", float("inf"))
+                    if current_val_loss < best_val_loss:
+                        best_val_loss = current_val_loss
+                        patience_counter = 0
+                    else:
+                        patience_counter += 1
+                    if patience_counter >= early_stopping_patience:
+                        print(f"Early stopping at epoch {epoch}")
+                        break
+        else:
+            # Single training mode: use MLflow
+            with mlflow.start_run():
+                # Log hyperparameters
+                mlflow.log_params(self.get_params())
+                mlflow.log_params(
+                    {
+                        "num_epochs": num_epochs,
+                        "num_epochs_warmup": num_epochs_warmup,
+                    }
+                )
+
+                if early_stopping_patience is not None:
+                    best_val_loss = float("inf")
+                    patience_counter = 0
+
+                for epoch in range(num_epochs):
+                    # Training epoch
+                    train_loss, train_metrics = self.run_epoch(
+                        train_loader, epoch=epoch, is_training=True
+                    )
+
+                    # Validation epoch
+                    val_loss, val_metrics = self.run_epoch(
+                        val_loader, epoch=epoch, is_training=False
+                    )
+
+                    # Log metrics to MLflow
+                    mlflow.log_metrics(metrics=train_loss, step=epoch)
+                    mlflow.log_metrics(metrics=train_metrics, step=epoch)
+                    mlflow.log_metrics(metrics=val_loss, step=epoch)
+                    mlflow.log_metrics(metrics=val_metrics, step=epoch)
+
+                    if early_stopping_patience is not None:
+                        current_val_loss = val_loss.get("val_loss", float("inf"))
+                        if current_val_loss < best_val_loss:
+                            best_val_loss = current_val_loss
+                            patience_counter = 0
+                        else:
+                            patience_counter += 1
+                        if patience_counter >= early_stopping_patience:
+                            print(f"Early stopping at epoch {epoch}")
+                            break
 
     def get_params(self) -> dict[str, float]:
         return {
@@ -196,61 +260,3 @@ class Trainer:
                         louvain_labels[representation], label_values
                     )
         return metrics
-
-    def train_with_tune(
-        self,
-        train_loader: torch.utils.data.DataLoader,
-        val_loader: torch.utils.data.DataLoader,
-        num_epochs: int,
-        num_epochs_warmup: int,
-    ) -> None:
-        """Train the model with Ray Tune integration for hyperparameter optimization."""
-        # Start MLflow run for this trial
-        with mlflow.start_run(nested=True):
-            # Log hyperparameters
-            mlflow.log_params(self.get_params())
-            mlflow.log_params(
-                {"num_epochs": num_epochs, "num_epochs_warmup": num_epochs_warmup}
-            )
-
-            best_val_loss = float("inf")
-            patience_counter = 0
-            patience = 10  # Early stopping patience
-
-            for epoch in range(num_epochs):
-                # Training epoch
-                train_loss, train_metrics = self.run_epoch(
-                    train_loader, epoch=epoch, is_training=True
-                )
-
-                # Validation epoch
-                val_loss, val_metrics = self.run_epoch(
-                    val_loader, epoch=epoch, is_training=False
-                )
-
-                # Log metrics to MLflow
-                mlflow.log_metrics(metrics=train_loss, step=epoch)
-                mlflow.log_metrics(metrics=train_metrics, step=epoch)
-                mlflow.log_metrics(metrics=val_loss, step=epoch)
-                mlflow.log_metrics(metrics=val_metrics, step=epoch)
-
-                # Report metrics to Ray Tune
-                tune.report(
-                    {"epoch": epoch}
-                    | val_loss
-                    | val_metrics
-                    | train_loss
-                    | train_metrics
-                )
-
-                # Early stopping based on validation loss
-                current_val_loss = val_loss.get("loss", float("inf"))
-                if current_val_loss < best_val_loss:
-                    best_val_loss = current_val_loss
-                    patience_counter = 0
-                else:
-                    patience_counter += 1
-
-                if patience_counter >= patience:
-                    print(f"Early stopping at epoch {epoch}")
-                    break

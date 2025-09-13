@@ -2,9 +2,13 @@
 # import anndata as ad
 import scanpy as sc
 import torch
+import mlflow
 from scienta.models import inVAE
 from scienta.datasets import AnnDataset
 from scienta.trainer import Trainer
+
+# Set up MLflow tracking
+mlflow.set_tracking_uri("file:///Users/jelkhoury/Desktop/perso/scienta/mlruns")
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -54,18 +58,14 @@ def run_experiment(beta: float, lr: float) -> float:
     ).to(device)
 
     trainer = Trainer(model=model, lr=lr, beta=beta)
-    # trainer.fit(
-    #     train_loader=train_loader,
-    #     val_loader=val_loader,
-    #     num_epochs=20,
-    #     num_epochs_warmup=10,
-    # )
-    trainer.train_with_tune(
+    # Single training mode: will create MLflow run automatically
+    trainer.fit(
         train_loader=train_loader,
         val_loader=val_loader,
         num_epochs=20,
         num_epochs_warmup=10,
-        # config=search_space,
+        early_stopping_patience=10,
+        is_tuning=False,  # This triggers MLflow logging
     )
 
 
