@@ -168,7 +168,15 @@ class inVAE(nn.Module):
         spur_prior_params = self.prior_spur(t_cov)
         inv_prior_params = self.prior_inv(b_cov)
         return (
-            latent_params | reconstructed_params | spur_prior_params | inv_prior_params
+            latent_params
+            | reconstructed_params
+            | spur_prior_params
+            | inv_prior_params
+            | {
+                "z_concat": z_concat,
+                "z_inv": z_inv,
+                "z_spur": z_spur,
+            }
         )
 
     def loss(
@@ -176,19 +184,15 @@ class inVAE(nn.Module):
         x: torch.Tensor,
         outputs: dict[str, torch.Tensor],
         beta: float,
+        beta_tc: float,
     ):
-        """Loss function."""
+        # your existing recon / KL parts
         disp = torch.exp(outputs["px_log_disp"])
         mean = torch.exp(outputs["px_log_mean"])
-
-        # recons_dist = NegativeBinomial(total_count=disp, logits=mean.log() - disp.log())
-        recons_dist = Normal(
-            loc=mean, scale=disp
-        )  # given data is not raw, use gaussian prior instead of NB
+        recons_dist = Normal(loc=mean, scale=disp)
         log_likelihood = recons_dist.log_prob(x).sum(dim=-1)
         reconstruction_loss = -torch.mean(log_likelihood)
 
-        # KL for invariant
         kl_inv = kl_divergence_gaussian(
             outputs["q_mean_inv"],
             outputs["q_log_var_inv"],
@@ -196,7 +200,6 @@ class inVAE(nn.Module):
             outputs["p_log_var_inv"],
         )
 
-        # KL for spurious
         kl_spur = kl_divergence_gaussian(
             outputs["q_mean_spur"],
             outputs["q_log_var_spur"],
@@ -204,15 +207,48 @@ class inVAE(nn.Module):
             outputs["p_log_var_spur"],
         )
 
-        kl_local = beta * torch.mean(
-            kl_inv + kl_spur
-        )  # multiply here so it shows on the right scale in mlflow
+        kl_local = beta * torch.mean(kl_inv + kl_spur)
 
-        # Total loss
-        total_loss = reconstruction_loss + kl_local
+        total_correlation = beta_tc * self.total_correlation(outputs)
+        total_loss = reconstruction_loss + kl_local + total_correlation
 
         return {
             "loss": total_loss,
             "reconstruction_loss": reconstruction_loss,
             "kl_divergence": kl_local,
+            "total_correlation": total_correlation,
         }
+
+    def total_correlation(self, outputs: dict[str, torch.Tensor]) -> torch.Tensor:
+        z_inv = outputs["z_inv"]
+        z_spur = outputs["z_spur"]
+        z_joint = torch.cat([z_inv, z_spur], dim=1)
+
+        q_mean_joint = torch.cat([outputs["q_mean_inv"], outputs["q_mean_spur"]], dim=1)
+        q_log_var_joint = torch.cat(
+            [outputs["q_log_var_inv"], outputs["q_log_var_spur"]], dim=1
+        )
+        q_std_joint = torch.exp(0.5 * q_log_var_joint)
+
+        q_mean_inv = outputs["q_mean_inv"]
+        q_log_var_inv = outputs["q_log_var_inv"]
+        q_std_inv = torch.exp(0.5 * q_log_var_inv)
+
+        q_mean_spur = outputs["q_mean_spur"]
+        q_log_var_spur = outputs["q_log_var_spur"]
+        q_std_spur = torch.exp(0.5 * q_log_var_spur)
+
+        # Create Normal distributions
+        q_joint = Normal(loc=q_mean_joint, scale=q_std_joint)
+        q_inv = Normal(loc=q_mean_inv, scale=q_std_inv)
+        q_spur = Normal(loc=q_mean_spur, scale=q_std_spur)
+
+        # Compute log probs
+        log_q_joint = q_joint.log_prob(z_joint).sum(dim=1)
+        log_q_inv = q_inv.log_prob(z_inv).sum(dim=1)
+        log_q_spur = q_spur.log_prob(z_spur).sum(dim=1)
+
+        # TC = log q(z) - [log q(z_inv) + log q(z_spur)]
+        tc_per_sample = log_q_joint - (log_q_inv + log_q_spur)
+        total_correlation = torch.mean(tc_per_sample)
+        return total_correlation

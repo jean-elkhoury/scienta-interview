@@ -13,6 +13,7 @@ dependencies = [
     "mypy>=1.17.1",
     "optuna>=4.5.0",
     "pydoclint>=0.7.3",
+    "pytest>=7.0.0",
     "ray[tune]>=2.49.1",
     "ruff>=0.12.12",
     "scanpy>=1.11.4",

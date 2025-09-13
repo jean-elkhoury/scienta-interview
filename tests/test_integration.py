@@ -68,7 +68,7 @@ class TestIntegration:
         )
 
         # Create trainer
-        trainer = Trainer(model=model, beta=1.0, lr=1e-3)
+        trainer = Trainer(model=model, beta=1.0, beta_tc=1.0, lr=1e-3)
 
         # Test a few training steps
         for i, batch in enumerate(train_loader):
@@ -108,7 +108,7 @@ class TestIntegration:
         )
 
         # Create trainer
-        trainer = Trainer(model=model, beta=1.0, lr=1e-3)
+        trainer = Trainer(model=model, beta=1.0, beta_tc=1.0, lr=1e-3)
 
         # Test validation epoch
         val_loss, val_metrics = trainer.run_epoch(
@@ -145,7 +145,7 @@ class TestIntegration:
         ).cuda()
 
         # Create trainer
-        trainer = Trainer(model=model, beta=1.0, lr=1e-3)
+        trainer = Trainer(model=model, beta=1.0, beta_tc=1.0, lr=1e-3)
 
         # Test training step on GPU
         batch = next(iter(train_loader))
@@ -176,7 +176,7 @@ class TestIntegration:
         )
 
         # Create trainer
-        trainer = Trainer(model=model, beta=1.0, lr=1e-3)
+        trainer = Trainer(model=model, beta=1.0, beta_tc=1.0, lr=1e-3)
 
         # Get a batch
         batch = next(iter(torch.utils.data.DataLoader(dataset, batch_size=32)))

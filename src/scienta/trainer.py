@@ -14,10 +14,11 @@ import mlflow
 
 
 class Trainer:
-    def __init__(self, model: inVAE, beta: float, **optimizer_kwargs):
+    def __init__(self, model: inVAE, beta: float, beta_tc: float, **optimizer_kwargs):
         self.optimizer = torch.optim.Adam(model.parameters(), **optimizer_kwargs)
         self.model = model
         self.beta = beta
+        self.beta_tc = beta_tc
         self.gradient_steps = 0
 
     def training_step(
@@ -27,9 +28,12 @@ class Trainer:
     ) -> tuple[dict[str, torch.Tensor], dict[str, float], dict[str, float]]:
         """"""
         beta = self.beta if not is_warmup else 0.0
+        beta_tc = self.beta_tc if not is_warmup else 0.0
         counts, b_cov_data, t_cov_data = batch
         outputs = self.model.forward(x=counts, b_cov=b_cov_data, t_cov=t_cov_data)
-        batch_loss = self.model.loss(x=counts, outputs=outputs, beta=beta)
+        batch_loss = self.model.loss(
+            x=counts, outputs=outputs, beta=beta, beta_tc=beta_tc
+        )
 
         # Compute metrics for this batch
         batch_metrics = self.compute_metrics(
@@ -77,8 +81,9 @@ class Trainer:
                     x=counts, b_cov=b_cov_data, t_cov=t_cov_data
                 )
                 beta = self.beta if not is_warmup else 0.0
+                beta_tc = self.beta_tc if not is_warmup else 0.0
                 batch_loss_tensor = self.model.loss(
-                    x=counts, outputs=outputs, beta=beta
+                    x=counts, outputs=outputs, beta=beta, beta_tc=beta_tc
                 )
                 batch_metrics = self.compute_metrics(
                     outputs=outputs,
@@ -126,24 +131,23 @@ class Trainer:
         early_stopping_patience: int | None = None,
         is_tuning: bool = False,
     ):
-        if is_tuning:
-            # Ray Tune mode: no MLflow logging, just report to Ray Tune
-            if early_stopping_patience is not None:
-                best_val_loss = float("inf")
-                patience_counter = 0
+        if early_stopping_patience is not None:
+            best_val_loss = float("inf")
+            patience_counter = 0
 
-            for epoch in range(num_epochs):
-                # Training epoch
-                train_loss, train_metrics = self.run_epoch(
-                    train_loader, epoch=epoch, is_training=True
-                )
+        for epoch in range(num_epochs):
+            # Training epoch
+            train_loss, train_metrics = self.run_epoch(
+                train_loader, epoch=epoch, is_training=True
+            )
 
-                # Validation epoch
-                val_loss, val_metrics = self.run_epoch(
-                    val_loader, epoch=epoch, is_training=False
-                )
+            # Validation epoch
+            val_loss, val_metrics = self.run_epoch(
+                val_loader, epoch=epoch, is_training=False
+            )
 
-                # Report metrics to Ray Tune
+            if is_tuning:
+                # Give everything to Ray and let it handle mlflow logs
                 tune.report(
                     {"epoch": epoch}
                     | val_loss
@@ -151,21 +155,8 @@ class Trainer:
                     | train_loss
                     | train_metrics
                 )
-
-                if early_stopping_patience is not None:
-                    current_val_loss = val_loss.get("val_loss", float("inf"))
-                    if current_val_loss < best_val_loss:
-                        best_val_loss = current_val_loss
-                        patience_counter = 0
-                    else:
-                        patience_counter += 1
-                    if patience_counter >= early_stopping_patience:
-                        print(f"Early stopping at epoch {epoch}")
-                        break
-        else:
-            # Single training mode: use MLflow
-            with mlflow.start_run():
-                # Log hyperparameters
+            else:
+                # plain mlflow logging
                 mlflow.log_params(self.get_params())
                 mlflow.log_params(
                     {
@@ -173,42 +164,26 @@ class Trainer:
                         "num_epochs_warmup": num_epochs_warmup,
                     }
                 )
+                mlflow.log_metrics(metrics=train_loss, step=epoch)
+                mlflow.log_metrics(metrics=train_metrics, step=epoch)
+                mlflow.log_metrics(metrics=val_loss, step=epoch)
+                mlflow.log_metrics(metrics=val_metrics, step=epoch)
 
-                if early_stopping_patience is not None:
-                    best_val_loss = float("inf")
+            if early_stopping_patience is not None:
+                current_val_loss = val_loss.get("val_loss", float("inf"))
+                if current_val_loss < best_val_loss:
+                    best_val_loss = current_val_loss
                     patience_counter = 0
-
-                for epoch in range(num_epochs):
-                    # Training epoch
-                    train_loss, train_metrics = self.run_epoch(
-                        train_loader, epoch=epoch, is_training=True
-                    )
-
-                    # Validation epoch
-                    val_loss, val_metrics = self.run_epoch(
-                        val_loader, epoch=epoch, is_training=False
-                    )
-
-                    # Log metrics to MLflow
-                    mlflow.log_metrics(metrics=train_loss, step=epoch)
-                    mlflow.log_metrics(metrics=train_metrics, step=epoch)
-                    mlflow.log_metrics(metrics=val_loss, step=epoch)
-                    mlflow.log_metrics(metrics=val_metrics, step=epoch)
-
-                    if early_stopping_patience is not None:
-                        current_val_loss = val_loss.get("val_loss", float("inf"))
-                        if current_val_loss < best_val_loss:
-                            best_val_loss = current_val_loss
-                            patience_counter = 0
-                        else:
-                            patience_counter += 1
-                        if patience_counter >= early_stopping_patience:
-                            print(f"Early stopping at epoch {epoch}")
-                            break
+                else:
+                    patience_counter += 1
+                if patience_counter >= early_stopping_patience:
+                    print(f"Early stopping at epoch {epoch}")
+                    break
 
     def get_params(self) -> dict[str, float]:
         return {
             "beta": self.beta,
+            "beta_tc": self.beta_tc,
             "lr": self.optimizer.param_groups[0]["lr"],
             "n_latent_inv": self.model.n_latent_inv,
             "n_latent_spur": self.model.n_latent_spur,

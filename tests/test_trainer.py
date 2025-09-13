@@ -33,16 +33,17 @@ class TestTrainer:
 
     def test_trainer_creation(self, sample_model):
         """Test that the trainer can be created."""
-        trainer = Trainer(model=sample_model, beta=1.0, lr=1e-3)
+        trainer = Trainer(model=sample_model, beta=1.0, beta_tc=1.0, lr=1e-3)
 
         assert trainer.model == sample_model
         assert trainer.beta == 1.0
+        assert trainer.beta_tc == 1.0
         assert trainer.optimizer.param_groups[0]["lr"] == 1e-3
         assert trainer.gradient_steps == 0
 
     def test_training_step(self, sample_model, sample_batch):
         """Test that training step works."""
-        trainer = Trainer(model=sample_model, beta=1.0, lr=1e-3)
+        trainer = Trainer(model=sample_model, beta=1.0, beta_tc=1.0, lr=1e-3)
 
         # Test training step
         outputs, batch_loss, batch_metrics = trainer.training_step(sample_batch)
@@ -57,7 +58,7 @@ class TestTrainer:
 
     def test_training_step_warmup(self, sample_model, sample_batch):
         """Test training step with warmup (beta=0)."""
-        trainer = Trainer(model=sample_model, beta=1.0, lr=1e-3)
+        trainer = Trainer(model=sample_model, beta=1.0, beta_tc=1.0, lr=1e-3)
 
         # Test warmup step
         outputs, batch_loss, batch_metrics = trainer.training_step(
@@ -69,7 +70,7 @@ class TestTrainer:
 
     def test_convert_tensors_to_scalars(self, sample_model):
         """Test the tensor to scalar conversion method."""
-        trainer = Trainer(model=sample_model, beta=1.0, lr=1e-3)
+        trainer = Trainer(model=sample_model, beta=1.0, beta_tc=1.0, lr=1e-3)
 
         # Test with mixed tensor and scalar values
         test_dict = {
@@ -92,12 +93,13 @@ class TestTrainer:
 
     def test_get_params(self, sample_model):
         """Test that get_params returns the correct parameters."""
-        trainer = Trainer(model=sample_model, beta=2.0, lr=1e-4)
+        trainer = Trainer(model=sample_model, beta=2.0, beta_tc=2.0, lr=1e-4)
 
         params = trainer.get_params()
 
         expected_keys = [
             "beta",
+            "beta_tc",
             "lr",
             "n_latent_inv",
             "n_latent_spur",
@@ -110,13 +112,14 @@ class TestTrainer:
             assert key in params
 
         assert params["beta"] == 2.0
+        assert params["beta_tc"] == 2.0
         assert params["lr"] == 1e-4
         assert params["n_latent_inv"] == 20
         assert params["n_latent_spur"] == 5
 
     def test_compute_metrics(self, sample_model, sample_batch):
         """Test that compute_metrics works."""
-        trainer = Trainer(model=sample_model, beta=1.0, lr=1e-3)
+        trainer = Trainer(model=sample_model, beta=1.0, beta_tc=1.0, lr=1e-3)
 
         # Get model outputs
         counts, b_cov_data, t_cov_data = sample_batch
@@ -157,7 +160,7 @@ class TestTrainer:
             n_tech_covariates=3,
         ).cuda()
 
-        trainer = Trainer(model=model, beta=1.0, lr=1e-3)
+        trainer = Trainer(model=model, beta=1.0, beta_tc=1.0, lr=1e-3)
 
         # Move batch to GPU
         gpu_batch = tuple(tensor.cuda() for tensor in sample_batch)

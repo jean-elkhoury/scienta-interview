@@ -86,7 +86,7 @@ class TestInVAE:
         t_cov = torch.randn(batch_size, 3)
 
         outputs = model.forward(x=x, b_cov=b_cov, t_cov=t_cov)
-        loss_dict = model.loss(x=x, outputs=outputs, beta=1.0)
+        loss_dict = model.loss(x=x, outputs=outputs, beta=1.0, beta_tc=1.0)
 
         # Check that loss components are present
         assert "loss" in loss_dict
@@ -115,7 +115,7 @@ class TestInVAE:
         t_cov = torch.randn(batch_size, 3).cuda()
 
         outputs = model.forward(x=x, b_cov=b_cov, t_cov=t_cov)
-        loss_dict = model.loss(x=x, outputs=outputs, beta=1.0)
+        loss_dict = model.loss(x=x, outputs=outputs, beta=1.0, beta_tc=1.0)
 
         # Check that outputs are on GPU
         for key, value in outputs.items():

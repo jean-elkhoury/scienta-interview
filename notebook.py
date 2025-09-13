@@ -7,9 +7,6 @@ from scienta.models import inVAE
 from scienta.datasets import AnnDataset
 from scienta.trainer import Trainer
 
-# Set up MLflow tracking
-mlflow.set_tracking_uri("file:///Users/jelkhoury/Desktop/perso/scienta/mlruns")
-
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -46,30 +43,33 @@ test_loader = torch.utils.data.DataLoader(
 n_celltypes = adata.obs["celltype"].nunique()
 n_batches = adata.obs["sample"].nunique()
 
-beta = 10.0
-lr = 1e-5
 
-
-def run_experiment(beta: float, lr: float) -> float:
+def run_experiment(beta: float, beta_tc: float, lr: float) -> float:
     model = inVAE(
         n_genes=dataset.count.shape[1],
         n_bio_covariates=n_celltypes,
         n_tech_covariates=n_batches,
     ).to(device)
 
-    trainer = Trainer(model=model, lr=lr, beta=beta)
-    # Single training mode: will create MLflow run automatically
-    trainer.fit(
-        train_loader=train_loader,
-        val_loader=val_loader,
-        num_epochs=20,
-        num_epochs_warmup=10,
-        early_stopping_patience=10,
-        is_tuning=False,  # This triggers MLflow logging
-    )
+    trainer = Trainer(model=model, lr=lr, beta=beta, beta_tc=beta_tc)
+    with mlflow.start_run():
+        trainer.fit(
+            train_loader=train_loader,
+            val_loader=val_loader,
+            num_epochs=20,
+            num_epochs_warmup=10,
+            early_stopping_patience=10,
+            is_tuning=False,
+        )
 
 
-run_experiment(beta=beta, lr=lr)
+# %%
+
+beta = 10.0
+beta_tc = 10.0
+lr = 1e-5
+
+run_experiment(beta=beta, beta_tc=beta_tc, lr=lr)
 
 # %%
 

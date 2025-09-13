@@ -87,7 +87,9 @@ def train_invae_tune(config):
     ).to(device)
 
     # Create trainer
-    trainer = Trainer(model=model, beta=config["beta"], lr=config["lr"])
+    trainer = Trainer(
+        model=model, beta=config["beta"], beta_tc=config["beta_tc"], lr=config["lr"]
+    )
 
     # Train with Ray Tune integration
     trainer.fit(
