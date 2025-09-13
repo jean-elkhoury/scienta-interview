@@ -27,7 +27,7 @@ def load_data():
     """Load and prepare the dataset."""
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+
     # Load data
     adata = sc.read(
         "/Users/jelkhoury/Desktop/perso/scienta/data/pancreas.h5ad",
@@ -35,7 +35,7 @@ def load_data():
     del adata.raw
 
     # Create dataset
-    dataset = AnnDataset(adata, tech_vars=["sample"], bio_vars=["celltype"], device=device)
+    dataset = AnnDataset(adata, tech_vars=["sample"], bio_vars=["celltype"])
 
     # Split data
     train_val_dataset, test_dataset = torch.utils.data.random_split(dataset, [0.8, 0.2])
@@ -55,7 +55,7 @@ def train_invae_tune(config):
     """Training function for Ray Tune."""
     # Set random seeds for reproducibility
     torch.manual_seed(42)
-    
+
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

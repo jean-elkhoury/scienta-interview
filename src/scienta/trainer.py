@@ -181,13 +181,13 @@ class Trainer:
         louvain_labels = {}
         ground_truth_labels = {}
 
-        ground_truth_labels["bio"] = b_cov_data.detach().numpy().argmax(axis=1)
-        ground_truth_labels["batch"] = t_cov_data.detach().numpy().argmax(axis=1)
+        ground_truth_labels["bio"] = b_cov_data.detach().cpu().numpy().argmax(axis=1)
+        ground_truth_labels["batch"] = t_cov_data.detach().cpu().numpy().argmax(axis=1)
         metric_dict = {"ari": ari, "nmi": nmi}
         metrics = {}
         for representation in "inv", "spur":
             louvain_labels[representation] = self.louvain_clusters(
-                features=outputs[f"q_mean_{representation}"].detach().numpy()
+                features=outputs[f"q_mean_{representation}"].detach().cpu().numpy()
             )
             metrics[f"n_clust_{representation}"] = louvain_labels[representation].max()
             for label_name, label_values in ground_truth_labels.items():
