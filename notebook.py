@@ -35,48 +35,24 @@ val_loader = torch.utils.data.DataLoader(
 
 n_celltypes = adata.obs["celltype"].nunique()
 n_batches = adata.obs["sample"].nunique()
-beta = 1.0
+beta = 10.0
 lr = 1e-5
 
 model = inVAE(
     n_input=adata.shape[1],
     n_bio_covariates=n_celltypes,
     n_tech_covariates=n_batches,
-    beta=beta,
 )
-trainer = Trainer(model=model, lr=lr)
+trainer = Trainer(model=model, lr=lr, beta=beta)
 
 # %%
 trainer.fit(
     train_loader=train_loader,
     val_loader=val_loader,
     num_epochs=20,
-    num_epochs_warmup=5,
+    # num_epochs_warmup=5,
 )
-
-
 # %%
-def louvain_clusters(features: np.ndarray):
-    knn = NearestNeighbors(n_neighbors=10)
-    knn.fit(features)
-    # clust.fit(full_counts)
-    graph = knn.kneighbors_graph(features)
-    clust = Louvain()
-    clust.fit(graph)
-    return clust.labels_
-
-
-# ari_result = ari(cluster, celltype)
-
-
-ari(adata.obs["sample"], adata.obs["louvain"])
-
-# %%
-ari(
-    adata.obs["sample"],
-    np.random.randint(low=0, high=20, size=adata.obs["sample"].shape),
-)
-
 
 # 2. Standard preprocessing of data
 # sc.pp.filter_genes(adata, min_cells=10)
@@ -91,3 +67,5 @@ ari(
 # %%
 # sc.pl.umap(adata, color="celltype")
 # sc.pl.umap(adata, color="sample")
+
+# %%

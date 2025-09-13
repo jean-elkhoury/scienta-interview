@@ -42,10 +42,8 @@ class inVAE(nn.Module):
         n_hidden: int = 128,
         n_layers: int = 2,
         dropout_rate: float = 0.1,
-        beta: float = 1.0,
     ):
         super().__init__()
-        self.beta = beta
 
         # Shared encoder
         encoder_input_dim = n_input + n_bio_covariates + n_tech_covariates
@@ -175,8 +173,6 @@ class inVAE(nn.Module):
         beta: float | None = None,
     ):
         """Loss function."""
-        if beta is None:
-            beta = self.beta
         disp = torch.exp(outputs["px_log_disp"])
         mean = torch.exp(outputs["px_log_mean"])
 

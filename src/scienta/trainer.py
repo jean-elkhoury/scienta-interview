@@ -14,25 +14,29 @@ from scienta.models import inVAE
 
 
 class Trainer:
-    def __init__(self, model: inVAE, **optimizer_kwargs):
+    def __init__(self, model: inVAE, beta: float, **optimizer_kwargs):
         self.optimizer = torch.optim.Adam(model.parameters(), **optimizer_kwargs)
         self.model = model
+        self.beta = beta
         self.gradient_steps = 0
 
     def step(
         self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
-    ) -> dict[str, torch.Tensor]:
+    ) -> tuple[dict[str, torch.Tensor], dict[str, float]]:
         """"""
         counts, b_cov_data, t_cov_data = batch
         outputs = self.model.forward(x=counts, b_cov=b_cov_data, t_cov=t_cov_data)
-        loss_dict = self.model.loss(counts, outputs, beta=self.beta_scheduled)
+        loss_dict = self.model.loss(counts, outputs, beta=self.beta)
+
+        # Compute metrics for this batch
+        metrics = self.compute_metrics(outputs, b_cov_data, t_cov_data, prefix="train")
 
         mlflow.log_metrics(loss_dict, step=self.gradient_steps)
         total_loss = loss_dict["loss"]
         total_loss.backward()
         self.optimizer.step()
         self.gradient_steps += 1
-        return outputs
+        return outputs, metrics
 
     def evaluate(self, val_loader: torch.utils.data.DataLoader) -> dict[str, float]:
         self.model.eval()
@@ -44,25 +48,13 @@ class Trainer:
         for batch in val_loader:
             counts, b_cov_data, t_cov_data = batch
             outputs = self.model.forward(x=counts, b_cov=b_cov_data, t_cov=t_cov_data)
-            loss = self.model.loss(counts, outputs, self.beta_scheduled)
+            loss = self.model.loss(counts, outputs, beta=self.beta)
             for key, value in loss.items():
                 val_loss[f"val_{key}"] += value
-            louvain_labels = self.louvain_clusters(
-                features=outputs["q_mean_inv"].detach().numpy()
-            )
-            celltypes = b_cov_data.detach().numpy().argmax(axis=1)
-            batches = t_cov_data.detach().numpy().argmax(axis=1)
-            ari_celltype = ari(louvain_labels, celltypes)
-            ari_batches = ari(louvain_labels, batches)
-            nmi_celltype = nmi(louvain_labels, celltypes)
-            nmi_batches = nmi(louvain_labels, batches)
+
+            metrics = self.compute_metrics(outputs, b_cov_data, t_cov_data)
             mlflow.log_metrics(
-                {
-                    "val_ari_celltype": ari_celltype,  # TODO debt hardcoded values
-                    "val_nmi_celltype": nmi_celltype,
-                    "val_ari_batches": ari_batches,
-                    "val_nmi_batches": nmi_batches,
-                },
+                metrics,
                 step=self.gradient_steps,
             )
         self.model.train()
@@ -79,18 +71,65 @@ class Trainer:
         clust.fit(graph)
         return clust.labels_
 
+    def compute_metrics(
+        self,
+        outputs: dict[str, torch.Tensor],
+        b_cov_data: torch.Tensor,
+        t_cov_data: torch.Tensor,
+        prefix: str = "val",
+    ) -> dict[str, float]:
+        louvain_labels = {}
+        ground_truth_labels = {}
+
+        ground_truth_labels["bio"] = b_cov_data.detach().numpy().argmax(axis=1)
+        ground_truth_labels["batch"] = t_cov_data.detach().numpy().argmax(axis=1)
+        metric_dict = {"ari": ari, "nmi": nmi}
+        metrics = {}
+        for representation in "inv", "spur":
+            louvain_labels[representation] = self.louvain_clusters(
+                features=outputs[f"q_mean_{representation}"].detach().numpy()
+            )
+            mlflow.log_metric(
+                key=f"n_clust_{representation}",
+                value=louvain_labels[representation].max(),
+                step=self.gradient_steps,
+            )
+            for label_name, label_values in ground_truth_labels.items():
+                for metric, metric_func in metric_dict.items():
+                    metrics[f"{prefix}_{metric}_{representation}_{label_name}"] = (
+                        metric_func(louvain_labels[representation], label_values)
+                    )
+        return metrics
+
     def fit(
         self,
         train_loader: torch.utils.data.DataLoader,
         val_loader: torch.utils.data.DataLoader,
         num_epochs: int,
-        num_epochs_warmup: int,
+        # num_epochs_warmup: int,
     ):
         with mlflow.start_run():
             for epoch in np.arange(num_epochs):
-                self.beta_scheduled = (
-                    max(1.0, float(epoch / num_epochs_warmup)) * self.model.beta
-                )
+                # Track training metrics for this epoch
+                train_metrics_accumulator = {}
+                num_batches = 0
+
                 for batch in tqdm(train_loader):
-                    self.step(batch)
+                    outputs, batch_metrics = self.step(batch)
+
+                    # Training metrics
+                    for metric_name, metric_value in batch_metrics.items():
+                        if metric_name not in train_metrics_accumulator:
+                            train_metrics_accumulator[metric_name] = 0.0
+                        train_metrics_accumulator[metric_name] += metric_value
+                    num_batches += 1
+
+                # Compute and log average training metrics for this epoch
+                if num_batches > 0:
+                    avg_train_metrics = {
+                        metric_name: metric_sum / num_batches
+                        for metric_name, metric_sum in train_metrics_accumulator.items()
+                    }
+                    mlflow.log_metrics(avg_train_metrics, step=epoch)
+
                 self.evaluate(val_loader)
