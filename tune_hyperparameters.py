@@ -25,6 +25,9 @@ from scienta.config.tune_config import (
 
 def load_data():
     """Load and prepare the dataset."""
+    # Set device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     # Load data
     adata = sc.read(
         "/Users/jelkhoury/Desktop/perso/scienta/data/pancreas.h5ad",
@@ -32,7 +35,7 @@ def load_data():
     del adata.raw
 
     # Create dataset
-    dataset = AnnDataset(adata, tech_vars=["sample"], bio_vars=["celltype"])
+    dataset = AnnDataset(adata, tech_vars=["sample"], bio_vars=["celltype"], device=device)
 
     # Split data
     train_val_dataset, test_dataset = torch.utils.data.random_split(dataset, [0.8, 0.2])
@@ -52,6 +55,9 @@ def train_invae_tune(config):
     """Training function for Ray Tune."""
     # Set random seeds for reproducibility
     torch.manual_seed(42)
+    
+    # Set device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load data
     train_dataset, val_dataset, test_dataset, n_genes, n_celltypes, n_batches = (
@@ -76,7 +82,7 @@ def train_invae_tune(config):
         n_hidden=int(config["n_hidden"]),
         n_layers=int(config["n_layers"]),
         dropout_rate=config["dropout_rate"],
-    )
+    ).to(device)
 
     # Create trainer
     trainer = Trainer(model=model, beta=config["beta"], lr=config["lr"])
@@ -167,7 +173,8 @@ def main():
 
     # Save best configuration
     best_config = best_trial.config
-    print("\nBest configuration saved to: ./ray_results/best_config.json")
+    print(f"\nBest configuration: {best_config}")
+    print("Best configuration saved to: ./ray_results/best_config.json")
 
     # Create a summary of all trials
     results_df = analysis.results_df

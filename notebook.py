@@ -6,6 +6,10 @@ from scienta.models import inVAE
 from scienta.datasets import AnnDataset
 from scienta.trainer import Trainer
 
+# Set device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
 # 1. Load and explore
 # %%
 adata = sc.read(
@@ -47,7 +51,7 @@ def run_experiment(beta: float, lr: float) -> float:
         n_genes=dataset.count.shape[1],
         n_bio_covariates=n_celltypes,
         n_tech_covariates=n_batches,
-    )
+    ).to(device)
 
     trainer = Trainer(model=model, lr=lr, beta=beta)
     # trainer.fit(
@@ -63,6 +67,7 @@ def run_experiment(beta: float, lr: float) -> float:
         num_epochs_warmup=10,
         # config=search_space,
     )
+
 
 run_experiment(beta=beta, lr=lr)
 
