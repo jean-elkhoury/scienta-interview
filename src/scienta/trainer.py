@@ -11,6 +11,7 @@ from sklearn.metrics import (
     normalized_mutual_info_score as nmi,
 )
 from scienta.models import inVAE
+from ray import tune
 
 
 class Trainer:
@@ -20,49 +21,108 @@ class Trainer:
         self.beta = beta
         self.gradient_steps = 0
 
-    def step(
+    def training_step(
         self, batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
-    ) -> tuple[dict[str, torch.Tensor], dict[str, float]]:
+    ) -> tuple[dict[str, torch.Tensor], dict[str, float], dict[str, float]]:
         """"""
         counts, b_cov_data, t_cov_data = batch
         outputs = self.model.forward(x=counts, b_cov=b_cov_data, t_cov=t_cov_data)
-        loss_dict = self.model.loss(counts, outputs, beta=self.beta)
+        batch_loss = self.model.loss(x=counts, outputs=outputs, beta=self.beta)
 
         # Compute metrics for this batch
-        metrics = self.compute_metrics(outputs, b_cov_data, t_cov_data, prefix="train")
+        batch_metrics = self.compute_metrics(
+            outputs,
+            b_cov_data,
+            t_cov_data,
+            prefix="train",
+        )
 
-        mlflow.log_metrics(loss_dict, step=self.gradient_steps)
-        total_loss = loss_dict["loss"]
+        total_loss = batch_loss["loss"]
         total_loss.backward()
         self.optimizer.step()
         self.gradient_steps += 1
-        return outputs, metrics
+        return outputs, batch_loss, batch_metrics
 
-    def evaluate(self, val_loader: torch.utils.data.DataLoader) -> dict[str, float]:
-        self.model.eval()
-        val_loss = {
-            "val_loss": 0.0,  # TODO debt hardcoded values
-            "val_reconstruction_loss": 0.0,
-            "val_kl_divergence": 0.0,
-        }
-        for batch in val_loader:
-            counts, b_cov_data, t_cov_data = batch
-            outputs = self.model.forward(x=counts, b_cov=b_cov_data, t_cov=t_cov_data)
-            loss = self.model.loss(counts, outputs, beta=self.beta)
-            for key, value in loss.items():
-                val_loss[f"val_{key}"] += value
+    def run_epoch(
+        self,
+        data_loader: torch.utils.data.DataLoader,
+        epoch: int,
+        is_training: bool,
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """Base method for running an epoch with common logic for training and validation."""
+        # Set model mode
+        if is_training:
+            self.model.train()
+            prefix = "train"
+        else:
+            self.model.eval()
+            prefix = "val"
 
-            metrics = self.compute_metrics(outputs, b_cov_data, t_cov_data)
-            mlflow.log_metrics(
-                metrics,
-                step=self.gradient_steps,
-            )
-        self.model.train()
-        mlflow.log_metrics(val_loss, step=self.gradient_steps)
-        return val_loss
+        epoch_loss = {}
+        epoch_metrics = {}
+        num_batches = 0
+
+        for batch in tqdm(data_loader, desc=f"Looping on {prefix} loader"):
+            if is_training:
+                # Training: use step method which handles optimization
+                outputs, batch_loss, batch_metrics = self.training_step(batch)
+            else:
+                # Validation: forward pass only
+                counts, b_cov_data, t_cov_data = batch
+                outputs = self.model.forward(
+                    x=counts, b_cov=b_cov_data, t_cov=t_cov_data
+                )
+                batch_loss = self.model.loss(x=counts, outputs=outputs, beta=self.beta)
+                batch_metrics = self.compute_metrics(
+                    outputs,
+                    b_cov_data,
+                    t_cov_data,
+                    prefix=prefix,
+                )
+
+            # Accumulate losses and metrics
+            for loss_name, loss_value in batch_loss.items():
+                if loss_name not in epoch_loss:
+                    epoch_loss[loss_name] = 0.0
+                epoch_loss[loss_name] += loss_value
+
+            for metric_name, metric_value in batch_metrics.items():
+                if metric_name not in epoch_metrics:
+                    epoch_metrics[metric_name] = 0.0
+                epoch_metrics[metric_name] += metric_value
+
+            num_batches += 1
+
+        # Compute and log averages
+        if num_batches > 0:
+            avg_epoch_metrics = {
+                metric_name: metric_sum / num_batches
+                for metric_name, metric_sum in epoch_metrics.items()
+            }
+            avg_epoch_loss = {
+                loss_name: loss_sum / num_batches
+                for loss_name, loss_sum in epoch_loss.items()
+            }
+            mlflow.log_metrics(avg_epoch_metrics, step=epoch)
+            mlflow.log_metrics(avg_epoch_loss, step=epoch)
+
+            return avg_epoch_loss, avg_epoch_metrics
+        else:
+            return {}, {}
+
+    def fit(
+        self,
+        train_loader: torch.utils.data.DataLoader,
+        val_loader: torch.utils.data.DataLoader,
+        num_epochs: int,
+        # num_epochs_warmup: int,
+    ):
+        with mlflow.start_run():
+            for epoch in range(num_epochs):
+                self.run_epoch(train_loader, epoch=epoch, is_training=True)
+                self.run_epoch(val_loader, epoch=epoch, is_training=False)
 
     def louvain_clusters(self, features: np.ndarray):
-        """"""
         knn = NearestNeighbors(n_neighbors=10)
         knn.fit(features)
         # clust.fit(full_counts)
@@ -76,7 +136,7 @@ class Trainer:
         outputs: dict[str, torch.Tensor],
         b_cov_data: torch.Tensor,
         t_cov_data: torch.Tensor,
-        prefix: str = "val",
+        prefix: str,
     ) -> dict[str, float]:
         louvain_labels = {}
         ground_truth_labels = {}
@@ -89,11 +149,9 @@ class Trainer:
             louvain_labels[representation] = self.louvain_clusters(
                 features=outputs[f"q_mean_{representation}"].detach().numpy()
             )
-            mlflow.log_metric(
-                key=f"n_clust_{representation}",
-                value=louvain_labels[representation].max(),
-                step=self.gradient_steps,
-            )
+            metrics[f"{prefix}_n_clust_{representation}"] = louvain_labels[
+                representation
+            ].max()
             for label_name, label_values in ground_truth_labels.items():
                 for metric, metric_func in metric_dict.items():
                     metrics[f"{prefix}_{metric}_{representation}_{label_name}"] = (
@@ -101,35 +159,57 @@ class Trainer:
                     )
         return metrics
 
-    def fit(
+    def train_with_tune(
         self,
         train_loader: torch.utils.data.DataLoader,
         val_loader: torch.utils.data.DataLoader,
         num_epochs: int,
-        # num_epochs_warmup: int,
-    ):
-        with mlflow.start_run():
-            for epoch in np.arange(num_epochs):
-                # Track training metrics for this epoch
-                train_metrics_accumulator = {}
-                num_batches = 0
+        config: dict,
+    ) -> None:
+        """Train the model with Ray Tune integration for hyperparameter optimization."""
+        best_val_loss = float("inf")
+        patience_counter = 0
+        patience = 10  # Early stopping patience
 
-                for batch in tqdm(train_loader):
-                    outputs, batch_metrics = self.step(batch)
+        for epoch in range(num_epochs):
+            # Training epoch
+            train_loss, train_metrics = self.run_epoch(
+                train_loader, epoch=epoch, is_training=True
+            )
 
-                    # Training metrics
-                    for metric_name, metric_value in batch_metrics.items():
-                        if metric_name not in train_metrics_accumulator:
-                            train_metrics_accumulator[metric_name] = 0.0
-                        train_metrics_accumulator[metric_name] += metric_value
-                    num_batches += 1
+            # Validation epoch
+            val_loss, val_metrics = self.run_epoch(
+                val_loader, epoch=epoch, is_training=False
+            )
 
-                # Compute and log average training metrics for this epoch
-                if num_batches > 0:
-                    avg_train_metrics = {
-                        metric_name: metric_sum / num_batches
-                        for metric_name, metric_sum in train_metrics_accumulator.items()
-                    }
-                    mlflow.log_metrics(avg_train_metrics, step=epoch)
+            # Report metrics to Ray Tune
+            tune.report(
+                epoch=epoch,
+                train_loss=train_loss.get("loss", 0.0),
+                train_reconstruction_loss=train_loss.get("reconstruction_loss", 0.0),
+                train_kl_divergence=train_loss.get("kl_divergence", 0.0),
+                val_loss=val_loss.get("loss", 0.0),
+                val_reconstruction_loss=val_loss.get("reconstruction_loss", 0.0),
+                val_kl_divergence=val_loss.get("kl_divergence", 0.0),
+                # Add clustering metrics
+                train_ari_inv_bio=train_metrics.get("train_ari_inv_bio", 0.0),
+                train_ari_inv_batch=train_metrics.get("train_ari_inv_batch", 0.0),
+                train_ari_spur_bio=train_metrics.get("train_ari_spur_bio", 0.0),
+                train_ari_spur_batch=train_metrics.get("train_ari_spur_batch", 0.0),
+                val_ari_inv_bio=val_metrics.get("val_ari_inv_bio", 0.0),
+                val_ari_inv_batch=val_metrics.get("val_ari_inv_batch", 0.0),
+                val_ari_spur_bio=val_metrics.get("val_ari_spur_bio", 0.0),
+                val_ari_spur_batch=val_metrics.get("val_ari_spur_batch", 0.0),
+            )
 
-                self.evaluate(val_loader)
+            # Early stopping based on validation loss
+            current_val_loss = val_loss.get("loss", float("inf"))
+            if current_val_loss < best_val_loss:
+                best_val_loss = current_val_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if patience_counter >= patience:
+                print(f"Early stopping at epoch {epoch}")
+                break

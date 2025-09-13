@@ -34,7 +34,7 @@ class MLP(nn.Module):
 class inVAE(nn.Module):
     def __init__(
         self,
-        n_input: int,
+        n_genes: int,
         n_bio_covariates: int,
         n_tech_covariates: int,
         n_latent_inv: int = 30,
@@ -46,7 +46,7 @@ class inVAE(nn.Module):
         super().__init__()
 
         # Shared encoder
-        encoder_input_dim = n_input + n_bio_covariates + n_tech_covariates
+        encoder_input_dim = n_genes + n_bio_covariates + n_tech_covariates
         self.shared_encoder_mlp = MLP(
             encoder_input_dim, n_hidden, n_hidden, n_layers, dropout_rate
         )
@@ -63,8 +63,8 @@ class inVAE(nn.Module):
             decoder_input_dim, n_hidden, n_hidden, n_layers, dropout_rate
         )
 
-        self.px_log_mean_decoder = nn.Linear(n_hidden, n_input)
-        self.px_log_disp_decoder = nn.Linear(n_hidden, n_input)
+        self.px_log_mean_decoder = nn.Linear(n_hidden, n_genes)
+        self.px_log_disp_decoder = nn.Linear(n_hidden, n_genes)
 
         # Invariant prior
         self.prior_inv_mlp = MLP(
@@ -170,7 +170,7 @@ class inVAE(nn.Module):
         self,
         x: torch.Tensor,
         outputs: dict[str, torch.Tensor],
-        beta: float | None = None,
+        beta: float,
     ):
         """Loss function."""
         disp = torch.exp(outputs["px_log_disp"])
