@@ -37,7 +37,7 @@ def get_tune_config() -> Dict[str, Any]:
     }
 
 
-def get_metrics_to_optimize() -> Dict[str, str]:
+def get_metrics_to_optimize() -> Dict[str, str | list[str]]:
     """Get the metrics to optimize and their modes."""
     return {
         "primary_metric": "val_loss",

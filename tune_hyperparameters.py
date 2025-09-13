@@ -25,6 +25,7 @@ from scienta.config.tune_config import (
 from scienta.datasets import AnnDataset
 from scienta.models import inVAE
 from scienta.trainer import Trainer
+from scienta.utils import DATA_PATH, MLRUNS_PATH, RAY_RESULTS_PATH
 
 
 def load_data():
@@ -32,7 +33,7 @@ def load_data():
 
     # Load data
     adata = sc.read(
-        "/Users/jelkhoury/Desktop/perso/scienta/data/pancreas.h5ad",
+        DATA_PATH,
     )
     del adata.raw
 
@@ -110,7 +111,7 @@ if not torch.cuda.is_available():
     print("CUDA not available, using CPU")
 
 # Set up MLflow tracking
-mlflow.set_tracking_uri("file:///Users/jelkhoury/Desktop/perso/scienta/mlruns")
+mlflow.set_tracking_uri(MLRUNS_PATH)
 
 # Get configuration
 tune_config = get_tune_config()
@@ -119,7 +120,7 @@ sweep_name = f"invae_hyperparameter_search_{datetime.now().strftime('%Y%m%d_%H%M
 
 # Create MLflow logger callback for Ray Tune
 mlflow_logger = MLflowLoggerCallback(
-    tracking_uri="file:///Users/jelkhoury/Desktop/perso/scienta/mlruns",
+    tracking_uri=MLRUNS_PATH,
     experiment_name=sweep_name,
     tags={"project": "invae", "optimization": "ray_tune"},
 )
@@ -157,7 +158,7 @@ analysis = tune.run(
     search_alg=searcher,
     progress_reporter=reporter,
     callbacks=[mlflow_logger],  # Add MLflow logger callback
-    storage_path="/Users/jelkhoury/Desktop/perso/scienta/ray_results",
+    storage_path=RAY_RESULTS_PATH,
     name=sweep_name,
     resume="AUTO",  # Resume from previous runs if available
 )

@@ -44,7 +44,7 @@ n_celltypes = adata.obs["celltype"].nunique()
 n_batches = adata.obs["sample"].nunique()
 
 
-def run_experiment(beta: float, beta_tc: float, lr: float) -> float:
+def run_experiment(beta: float, beta_tc: float, lr: float) -> None:
     model = inVAE(
         n_genes=dataset.count.shape[1],
         n_bio_covariates=n_celltypes,

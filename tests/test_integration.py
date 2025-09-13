@@ -53,9 +53,6 @@ class TestIntegration:
         train_loader = torch.utils.data.DataLoader(
             train_dataset, batch_size=32, shuffle=True
         )
-        val_loader = torch.utils.data.DataLoader(
-            val_dataset, batch_size=len(val_dataset), shuffle=False
-        )
 
         # Create model
         n_celltypes = sample_data.obs["celltype"].nunique()

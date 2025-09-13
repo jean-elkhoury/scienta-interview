@@ -1,14 +1,12 @@
 # import anndata as ad
-import numpy as np
 import torch
-from sklearn.neighbors import NearestNeighbors
-from sknetwork.clustering import Louvain
 from tqdm import tqdm
 from sklearn.metrics import (
     adjusted_rand_score as ari,
     normalized_mutual_info_score as nmi,
 )
 from scienta.models import inVAE
+from scienta.utils import louvain_clusters
 from ray import tune
 import mlflow
 
@@ -64,8 +62,8 @@ class Trainer:
             self.model.eval()
             prefix = "val"
 
-        epoch_loss = {}
-        epoch_metrics = {}
+        epoch_loss: dict[str, float] = {}
+        epoch_metrics: dict[str, float] = {}
         num_batches = 0
 
         for batch in tqdm(data_loader, desc=f"Looping on {prefix} loader"):
@@ -202,15 +200,6 @@ class Trainer:
                 converted[key] = float(value)
         return converted
 
-    def louvain_clusters(self, features: np.ndarray):
-        knn = NearestNeighbors(n_neighbors=10)
-        knn.fit(features)
-        # clust.fit(full_counts)
-        graph = knn.kneighbors_graph(features)
-        clust = Louvain()
-        clust.fit(graph)
-        return clust.labels_
-
     def compute_metrics(
         self,
         outputs: dict[str, torch.Tensor],
@@ -225,7 +214,7 @@ class Trainer:
         metric_dict = {"ari": ari, "nmi": nmi}
         metrics = {}
         for representation in "inv", "spur":
-            louvain_labels[representation] = self.louvain_clusters(
+            louvain_labels[representation] = louvain_clusters(
                 features=outputs[f"q_mean_{representation}"].detach().cpu().numpy()
             )
             metrics[f"n_clust_{representation}"] = louvain_labels[representation].max()
